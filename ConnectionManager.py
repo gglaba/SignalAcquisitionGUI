@@ -1,13 +1,24 @@
 import paramiko
 from paramiko import SSHClient, AutoAddPolicy
+import threading
+import subprocess
+import select
 
 class ConnectionManager:
-    def __init__(self, ip, username, password, private_key_path):
+    def __init__(self,app, ip, username, password, private_key_path):
         self.ip = ip
         self.username = username
         self.password = password
         self.private_key_path = private_key_path
         self.client = None
+        self.error_event = threading.Event()
+        self.app = app
+
+        self.debug_log_file = open("debug.log", "w")
+
+    def log(self, message):
+        self.debug_log_file.write(f"{self.ip}: {message}\n")
+        self.debug_log_file.flush()
 
     def connect(self):
         self.client = SSHClient()
@@ -20,50 +31,41 @@ class ConnectionManager:
         if self.client:
             self.client.close()
             print(f"Disconnected from {self.ip}")
+            self.log(f"Disconnected")
 
     def execute_command(self, command):
-        if self.client:
-            stdin, stdout, stderr = self.client.exec_command(command)
-            for line in iter(lambda: stdout.readline(2048), ""):
-                yield line
+        self.stdin, self.stdout, self.stderr = self.client.exec_command(command)
+        self.start_listener()
+        self.stdout.channel.recv_exit_status()
+        return self.stdout, self.stderr
 
-    def run_command_routine(self):
-        try:
-            # Connect to device 1
-            ssh_client1 = self.connect_ssh(self.device1_ip)
-            print(f"Connected to {self.device1_ip}")
+    def start_listener(self):
+        self.stdout_content = ""
+        self.stderr_content = ""
+        self.listener_thread = threading.Thread(target=self.listener)
+        self.listener_thread.start()
 
-            # Connect to device 2
-            ssh_client2 = self.connect_ssh(self.device2_ip)
-            print(f"Connected to {self.device2_ip}")
+    def join_listener(self):
+        if self.listener_thread.is_alive():
+            self.listener_thread.join()
 
-            # Run commands on device 1
-            output1 = self.execute_command(ssh_client1,"cd RedPitaya/G && ./send_acquire")
-            print(f"Output from {self.device1_ip}:")
-            print(output1)
+    def count_threads(self):
+        return len(threading.enumerate())
 
-
-
-            # Run commands on device 2
-            output2 = self.execute_command(ssh_client2,"cd RedPitaya/G && ./send_acquire")
-            print(f"Output from {self.device2_ip}:")
-            print(output2)
-
-
-
-            ssh_client1.close()
-            ssh_client2.close()
-
-
-
-        except Exception as e:
-            print(f"An error occurred: {e}")
-
-# Usage example
-# device1_ip = "rp-f0ba38.local"
-# device2_ip = "rp-f0ac70.local"
-# username = "root"
-# private_key_path = "/home/grzesiula/.ssh/id_rsa"
-
-# command_routine = SSHCommandRoutine(device1_ip, device2_ip, username, private_key_path)
-# command_routine.run_command_routine()
+    def listener(self):
+        while True:
+            read_ready, _, _ = select.select([self.stdout.channel, self.stderr.channel], [], [], 0.1)
+            if not read_ready:
+                continue
+            for stream in read_ready:
+                if stream == self.stdout.channel and stream.recv_ready():
+                    stdout_content = stream.recv(1024).decode('utf-8')
+                    print("STDOUT_LISTENER:", stdout_content, end='', flush=True)
+                    self.log(stdout_content)
+                elif stream == self.stderr.channel and stream.recv_stderr_ready():
+                    stderr_content = stream.recv_stderr(1024).decode('utf-8')
+                    print("STDERR_LISTENER:", stderr_content, end='', flush=True)
+                    self.log(stderr_content)
+                    self.app.error_queue.put(f"{self.ip}: {stderr_content}")
+            if self.stdout.channel.exit_status_ready():
+                break
