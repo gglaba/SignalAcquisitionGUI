@@ -5,7 +5,7 @@ class ProgressWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("Acquisition Progress")
-
+        self.resizable(False, False)
         self.progressbar = ctk.CTkProgressBar(self)
         self.progressbar.configure(width=500, mode='indeterminate', progress_color="green", height=10)
         self.progressbar.pack(padx=10, pady=10)

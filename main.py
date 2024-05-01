@@ -6,9 +6,8 @@ import queue
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 import ConnectionManager
-from CTkMessagebox import CTkMessagebox
 from ProgressWindow import ProgressWindow
-from CheckBoxesFrame import CheckBoxesFrame
+from CheckBoxes import CheckBoxes
 
 
 load_dotenv()
@@ -23,20 +22,26 @@ username = os.getenv("USERNAME")
 password = os.getenv("PASSWORD")
 testusername = os.getenv("TESTUSERNAME")
 testpassword = os.getenv("TESTPASSWORD")
-
+testremotepath = os.getenv("REMOTHEPATHTEST")
+testlocalpath = os.getenv("LOCALPATHTEST")
 
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.command = "cd /home/grzesiula/Desktop/dev && ./a.out"
+        self.command = "cd /home/grzesiula/Desktop/dev/mock && ./a.out"
         self.connections = []
         self.error_queue = queue.Queue()
         self.selected_ips = []
+        if not os.path.exists("Data"):
+            os.makedirs("Data")
+        
         self.title("RedPitaya Signal Acquisition")
         self.geometry("400x400")
         self.grid_columnconfigure(0, weight=1)
-        self.checkboxes_frame = CheckBoxesFrame(self, "Devices", values=[masterRP, slave1, slave2, testip])
-        self.checkboxes_frame.grid(row=0, column=0, padx=10, pady=(10, 0), sticky="nsw")
+        self.resizable(False, False)
+
+        self.checkboxes_frame = CheckBoxes(self, "Devices", ips=[masterRP, slave1, slave2, testip])
+        self.checkboxes_frame.grid(row=0, column=0, padx=10, pady=(10, 10), sticky="nsew")
 
         self.connect_button = ctk.CTkButton(self, text="Connect to Pitayas", command=self.start_connect_to_devices_thread)
         self.connect_button.grid(row=3, column=0, padx=10, pady=10)
@@ -45,8 +50,13 @@ class App(ctk.CTk):
         self.acquire_button.grid(row=4, column=0, padx=10, pady=10)
         self.acquire_button.configure(state="disabled")
 
+        self.transfer_button = ctk.CTkButton(self, text="Transfer Data", command=self.transfer_files)
+        self.transfer_button.grid(row=5, column=0, padx=10, pady=10)
+        self.transfer_button.configure(state="disabled")
+
         self.check_errors()
         self.check_new_checked_boxes()
+        self.check_transfer_button()
 
     def check_new_checked_boxes(self):
         selected_ips = self.checkboxes_frame.get()
@@ -56,6 +66,14 @@ class App(ctk.CTk):
         elif len(self.selected_ips) == len(self.connections):
             self.connect_button.configure(state="disabled")
         self.after(100, self.check_new_checked_boxes)
+
+    def check_transfer_button(self):
+        #if the remote location not empty then enable the transfer button
+        for connection in self.connections:
+            if connection.list_files(testremotepath):
+                self.transfer_button.configure(state="normal")
+            else:
+                self.transfer_button.configure(state="disabled")
 
     def check_errors(self):
         try:
@@ -86,6 +104,7 @@ class App(ctk.CTk):
             for ip in self.selected_ips:
                 if ip not in [connection.ip for connection in self.connections]:
                     executor.submit(self.connect_to_device, ip)
+        self.check_transfer_button()
 
     def connect_to_device(self, ip):
             try:
@@ -120,6 +139,12 @@ class App(ctk.CTk):
             print(e_msg)
         finally:
             self.progress_window.close()
+        self.check_transfer_button()
+
+    def transfer_files(self): #this might take some time as it is transfering files from all connected devices but not in separate threads and each file is about 20mb
+        for connection in self.connections:
+            connection.transfer_all_csv_files(testremotepath, testlocalpath)
+        self.check_transfer_button()
 
     def disconnect_from_device(self, ip):
         for connection in self.connections:
